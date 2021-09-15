@@ -29,7 +29,7 @@ sudo apt-get update
 sudo apt install python3 python3-pip ffmpeg
 sudo pip3 install ffsubsync
 ```
-ffsubsync is not really required but it is recommended to help reduce subtitle timing mistakes 
+ffsubsync is not really required but it is recommended to help reduce subtitle timing mistakes. must first enable in script
 
 Ideally, you can insert this line to run the script every 30 minutes as a cronjob.
 This will run the script inside a screen so you can use screen-dr to view the progress.
