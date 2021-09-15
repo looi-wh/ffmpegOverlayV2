@@ -16,29 +16,28 @@ import re
 import random
 import string
 
-# == script settings ==
-arrayOfExtentions = [".avi", ".mkv", ".mov", ".mp4", ".wmv", ".flv", ".webm"] # which file extension to search for
-# cwd = os.getcwd() # sets to current location of cd
-cwd = "input folder dir" #input folder
-cwd_in_progress = "working folder dir" #transcoding folder (will create another sub folder to prevent conflicts)
-cwd_completed = "output folder dir" #finished files will come here
-targetContainer = ".mp4" # set target contatiner [IMPORTANT]
-arrayOfSubCodec = ["ass", "srt", "dvb_subtitle", "dvd_subtitle", "mov_text", "subt"]
+arrayOfExtentions = [".avi", ".mkv", ".mov", ".mp4", ".wmv", ".flv", ".webm"] # specify the file extensions to look at
+# cwd = os.getcwd() # sets current location [NOT RECOMMENDED - FOR DEBUGGING ONLY]
+cwd = "/input_folder" #input folder
+cwd_in_progress = "/conversion_folder" #transcoding folder (will create another sub folder to prevent conflicts)
+cwd_completed = "/completed_folder" #finished files will come here, can be jellyfin library folder
+targetContainer = ".mp4" # set target contatiner [IMPORTANT] - recommended: .mp4
+arrayOfSubCodec = ["ass", "srt", "dvb_subtitle", "dvd_subtitle", "mov_text", "subt"] # ignore
+arrayofSubExtentions = [".ass", ".srt"] # insert more if you think that your subtitle kept getting deleted or smthing
+illegalCharacters = ["'", '"', "<", ">", "|"] # this is important as this script cannot exists with such characters involved
 cleanUpList = [".txt", ".html", ".jpg", ".png", ".exe", ".bat", "._"]
 removeOringalFile = 1 # delete original files after writing the output files
 targetContainer = ".mp4" # set target contatiner [IMPORTANT]
-videotarget = "h264" # video codec
-audiotarget = "aac" # audio codec
-audiochannelstTarget = 2
-removeSubtitles = 1 # avoid extraction
-checkFolderSize = 60 # abort script if folder size between intervals are not the same
-subtitleExt = ".srt"
-mediaTargetx = [".en", ".zh", ".ms", ".id", "zt"] # any files which contain such words will be targeted by ffsubsync
-subsync = 1 # enable usage of ffsubsync
-
-if cwd == "input folder dir" or cwd_in_progress == "working folder dir" or cwd_completed == "output folder dir":
-	print("[FATAL] please edit script settings inside the script first")
-	exit()
+videotarget = "h264" # target video codec
+audiotarget = "aac" # target audio codec
+audiochannelstTarget = 2 # target audio channels, based on ffmpeg.
+removeSubtitles = 1 # removes subtitles from media, the goal of which is to avoid Jellyfin from extracting subtitles on the fly (better control over subtitles)
+checkFolderSize = 1800 # abort script if folder size between intervals are not the same [change if you know what you are doing]
+subtitleExt = ".srt" # target subtitle format
+mediaTargetx = [".en", ".zh", ".ms", ".id", ".zt"] # any files which contain such words will be targeted
+subsync = 0 # enable usage of ffsubsync [MUST INSTALL FIRST!]
+jellyfinServerLink="http://127.0.0.1:8096" # http to your jellyfin host
+jellyfinAPIKey="YOUR_OWN_API_KEY" # generate from your jellyfin > dashboard > API Keys. Generate an API key for this script and paste it here.
 
 # chmod
 command = "sudo chmod -R 777 " + cwd
@@ -46,20 +45,26 @@ os.system(command)
 
 # check if theres files in cwd
 if os.listdir(cwd) == []:
+	print("exited due to cwd being empty")
 	exit()
 else:
 	# prevent overlapping tasks by looking at cwd_in_progress
 	# replace with a higher value if your system can handle
- 	if len(os.listdir(cwd_in_progress)) > 2:
+ 	if len(os.listdir(cwd_in_progress)) > 3:
+ 		print("exited due to cwd_in_progress more than max processes")
  		exit()
 
 # check folder size
 if checkFolderSize > 0:
 	print("[NOTICE] Checking folder size")
-	size = subprocess.check_output(['du','-sh', cwd]).split()[0].decode('utf-8')
+	size = os.path.getsize(cwd)
+	print("folder size detected:", size)
+	print("waiting for", checkFolderSize, "seconds")
 	time.sleep(checkFolderSize)
-	size2 = subprocess.check_output(['du','-sh', cwd]).split()[0].decode('utf-8')
+	size2 = os.path.getsize(cwd)
+	print("folder size second check detected", size2)
 	if not size == size2:
+		print("directory size is detected to be changing, exiting..")
 		exit()
 
 def findFiles(arrayOfNames, workingDir): # file files in a given directory
@@ -84,11 +89,12 @@ def combineArray(input): # converts two dimension array to one dimension
 
 def runExtract(mediaName, subtitleName, streamNum): # runs ffmpeg [configure your ffmpeg here]
 	# -map '0:s?'
-	command = "ffmpeg -loglevel error -dump_attachment:t '' -i '" + mediaName + "' -map 0:" + streamNum + " -c:s srt -y '" + subtitleName + "'"
+	command = "ffmpeg -y -loglevel error -dump_attachment:t '' -i '" + mediaName + "' -map 0:" + streamNum + " -c:s srt -y '" + subtitleName + "'"
 	os.system(command) # runs the command
 	command = "rm -d -f -r *.ttf *.TTF *.otf *.OTF"
 	os.system(command)
 	if os.path.getsize(subtitleName)  < 9000:
+		print("[WARNING] Subtitle size too small, deleting..")
 		os.remove(subtitleName)
 	return 0
 
@@ -112,6 +118,14 @@ def extractSubsPackage(mediaName, targetLanguage, extraInfo):
 	stream_value = getLanStream(target, targetLanguage, "s")
 	if not stream_value == 99:
 		runExtract(target, target.replace(codecs, extraInfo), stream_value)
+	elif targetLanguage == "eng" and stream_value == 99:
+		# runs extract at first stream anyways
+		print("[WARNING] english subtitles not found, extracting first subs as english anyways")
+		try:
+			runExtract(target, target.replace(codecs, extraInfo), "s:0")
+		except:
+			print("[WARNING] title does not seem to have any subtitles in the first place")
+
 
 def runFFMPEG(inputname, outputname, videoc, audioc, channels): # runs ffmpeg [configure your custom ffmpeg commands here]
 	# the defaults are configured for:
@@ -122,7 +136,7 @@ def runFFMPEG(inputname, outputname, videoc, audioc, channels): # runs ffmpeg [c
 	# faststart, profile main
 	# -map '0:s?' -c:s mov_text 
 	# command = "ffmpeg -i '" + inputname + "' -preset veryfast -c:v copy -c:a copy -y -map 0:v:0 -map 0:a -movflags +faststart -ac 2 -map '0:s?' -c:s mov_text '" + outputname + "' "
-	command = "ffmpeg -i '" + inputname + "' -preset veryfast -c:v " + videoc +" -c:a " + audioc +" -pix_fmt yuv420p -map 0:v:0 -map 0:a:0 -hide_banner -loglevel panic -movflags +faststart -b:a 192k -ac " + str(channels) + " '" + outputname + "' "
+	command = "ffmpeg -y -i '" + inputname + "' -preset veryfast -c:v " + videoc +" -c:a " + audioc +" -pix_fmt yuv420p -map 0:v:0 -map 0:a:0 -hide_banner -loglevel panic -movflags +faststart -b:a 192k -ac " + str(channels) + " '" + outputname + "' "
 	os.system(command) # runs the command
 	return 0
 
@@ -162,10 +176,26 @@ def rog(length):
 	rogx = "".join(temp)
 	return str(rogx)
 
-def moveFiles(source, destination):
-	allfiles = os.listdir(source)
-	for f in allfiles:
-		shutil.move(source + "/" + f, destination + "/" + f)
+def moveFiles(source, destination, rsync):
+	global cwd_in_progress, illegalCharacters
+	if rsync == 1:
+		# uses rsync as the main function
+		print("")
+		print("running rsync to move files over")
+		for file in os.listdir(source):
+			d = os.path.join(source, file)
+			if os.path.isdir(d):
+				command = "rsync -aP '" + str(d) + "' '" + str(destination) + "'"
+				os.system(command) # runs the command
+				deleteDirectory(d)
+		return 1
+	else:
+		allfiles = os.listdir(source)
+		for f in allfiles:
+			shutil.move(source + "/" + f, destination + "/" + f)
+		return 1
+
+
 
 def getModifiedPath(originalPath):
 	ctitle = originalPath
@@ -179,17 +209,20 @@ def runFFSubsync(inputsubs, outputsubs, videofile):
 	os.system(command) # runs the command
 	return 0
 
-# remove illegal characters [remove to disable]
-for x in range(0, 1):
-	targetFiles = findFiles(arrayOfExtentions, cwd) # search for targets
-	for target in targetFiles: # recursive scrap thru all files in searched list
-		for codecs in arrayOfExtentions: # helps with determining the codecs
-			if not target.count(codecs) == 0: # prevent works on external
-				if not "._" in target:
-					os.renames(target, getModifiedPath(target))
-					shutil. rmtree(target) # delete original path
-print("[NOTICE] illegal characters removed from filenames")
-print("[HINT] removal of illegal characters helps to prevent any scripting issue later on")
+
+def deleteDirectory(inputx):
+	try:
+		command = "sudo rm -d -r -f '" + str(inputx) + "'"
+		os.system(command) # runs the command
+		print("[NOTICE] deletion of", inputx, "is a success")
+	except OSError as error:
+		print(error)
+		return 0
+
+def jf_refresh():
+	global jellyfinServerLink, jellyfinAPIKey
+	command = "curl -v -H 'X-MediaBrowser-Token: " + jellyfinAPIKey + "' -d '' " + jellyfinServerLink + "/Library/Refresh"
+	os.system(command)
 
 # clean up extra files downloaded with torrent [remove to disable]
 targetFiles = findFiles(cleanUpList, cwd) 
@@ -197,14 +230,14 @@ for target in targetFiles: # recursive scrap thru all files in searched list
 	for codecs in cleanUpList: # helps with determining the codecs
 		if not target.count(codecs) == 0: # prevent works on external
 			os.remove(target)
-    
+print("[NOTICE] extra files removed from folders")
 
 # move the files from cwd to cwd_in_progress
 unique_folder = rog(20)
 cwd_in_progress = cwd_in_progress + "/" + str(unique_folder) # create a random 20 chac folder
 os.mkdir(cwd_in_progress)
 print(cwd_in_progress, " will be the working directory for this session")
-moveFiles(cwd, cwd_in_progress)
+moveFiles(cwd, cwd_in_progress, 0)
 cwd = cwd_in_progress
 
 # search for targets
@@ -223,6 +256,7 @@ for target in targetFiles: # recursive scrap thru all files in searched list
 				extractSubsPackage(target, "chi", ".chinese.srt")
 				extractSubsPackage(target, "ind", ".indonesian.srt")
 				print("extraction job done for", target)
+
 print("[NOTICE] subtitle extraction completed")
 
 # subtitle sync job using ffsubsync.
@@ -243,7 +277,7 @@ if subsync == 1:
 						if removeOringalFile == 1:
 							os.remove(subtitleTarget)
 					except:
-						print("[WARNING] failed", subtitleOutput, ". please verify files manually")
+						print("[WARNING] failed", subtitleOutput, " but file might also not exist")
 	print("[NOTICE] subtitle syncing job done")
 else:
 	print("[ERROR] skipping sync job since subsync isnt enabled")
@@ -273,17 +307,30 @@ for target in targetFiles: # recursive scrap thru all files in searched list
 						if removeOringalFile == 1: # removes original file
 							os.remove(target)
 					else:
-						print(targetZero, "passed")
-				except:
+						print(targetZero, "passed as the video file met the requirements")
+				except OSError as error:
+					print(error)
 					print(targetZero, "is ignored as an error has occured")
 
 print("[NOTICE] transcode job has been completed! now trying to move the files into", cwd_completed)
 
 # move the files to final directory
-moveFiles(cwd_in_progress, cwd_completed)
-print("[NOTICE] moved files to", cwd_completed)
-# delete 
-shutil.rmtree(cwd_in_progress)
-print("[NOTICE] deleted the remains of", str(nique_folder))
+try:
+	moveFiles(cwd_in_progress, cwd_completed, 1)
+	print("[NOTICE] moved files to", cwd_completed)
+	print("deleting the rest of the working directory..")
+	deleteDirectory(cwd_in_progress)
+except:
+	print("[FATAL] final process failure, stopping script")
+	exit()
+
+if not jellyfinServerLink == "":
+	print("")
+	print("[NOTICE] sending a post request to", jellyfinServerLink, "(jellyfin server) to refresh library")
+	try:
+		jf_refresh()
+	except OSError as error:
+		print(error)
+		print("[WARNING] failure to send the refresh request, please refresh manually")
 
 print("job done")
